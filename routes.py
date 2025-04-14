@@ -244,7 +244,7 @@ def process_variable_barcode():
     
 @routes.route("/get-quantity", methods=["GET"])
 def get_quantity():
-    """API برای دریافت موجودی کالا بر اساس GoodID"""
+    """API برای دریافت موجودی کالا و نام کالا (Topic) بر اساس GoodID"""
     try:
         good_id = request.args.get("GoodID")
         if not good_id:
@@ -253,11 +253,22 @@ def get_quantity():
         conn = get_db_connection()
         cursor = conn.cursor()
 
+        # دریافت موجودی
         quantity = get_quantity_by_goodid(cursor, good_id)
-        if quantity is None:
-            return jsonify({"GoodID": good_id, "Quantity": None, "message": "کالا یافت نشد"}), 404
 
-        return jsonify({"GoodID": good_id, "Quantity": str(quantity)}), 200
+        # دریافت نام کالا از جدول Goods
+        cursor.execute("SELECT Topic FROM Goods WHERE GoodID = ?", (good_id,))
+        row = cursor.fetchone()
+        topic = row.Topic if row else None
+
+        if quantity is None and topic is None:
+            return jsonify({"GoodID": good_id, "Quantity": None, "Topic": None, "message": "کالا یافت نشد"}), 404
+
+        return jsonify({
+            "GoodID": good_id,
+            "Quantity": str(quantity) if quantity is not None else None,
+            "Topic": topic
+        }), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
