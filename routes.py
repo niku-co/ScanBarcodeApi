@@ -2,6 +2,7 @@ import hashlib
 from flask import Blueprint, jsonify, request
 from persiantools.jdatetime import JalaliDateTime
 from db import get_db_connection
+import time
 
 routes = Blueprint("routes", __name__)
 
@@ -107,6 +108,18 @@ def get_orders():
         if 'conn' in locals():
             conn.close()
 
+def get_quantity_by_goodid(cursor, good_id):
+    """دریافت موجودی (Quantity) از جدول Good_Store بر اساس GoodID"""
+    try:
+        cursor.execute("SELECT Quantity FROM Good_Store WHERE GoodID = ?", (good_id,))
+        row = cursor.fetchone()
+        if row:
+            return row.Quantity
+        return None
+    except Exception as e:
+        print("Error fetching quantity:", e)
+        return None
+    
 @routes.route("/update-delivery", methods=["GET", "POST"])
 def update_delivery():
     """Manually call UpdateDelivery stored procedure with a provided OrderID."""
@@ -158,10 +171,9 @@ def update_delivery():
     finally:
         if 'conn' in locals():
             conn.close()
-
+                
 @routes.route("/barcod", methods=["GET"])
 def process_variable_barcode():
-    """Process barcode with variable lengths for OrderTime and OrderNumber, fetch matching order, and retrieve Quantity."""
     try:
         barcode = request.args.get("barcod")
         if not barcode:
@@ -172,9 +184,9 @@ def process_variable_barcode():
 
         order_date = barcode[:8]
         remaining = barcode[8:]
-        
+
         if not remaining.isdigit():
-            return jsonify({"error": "Invalid barcode format: non-digit characters found in time/number part"}), 400
+            return jsonify({"error": "Invalid barcode format"}), 400
 
         possibilities = []
         if len(remaining) >= 4:
@@ -188,7 +200,7 @@ def process_variable_barcode():
         order = None
         chosen_order_time = None
         chosen_order_number = None
-        good_id = None  # برای ذخیره GoodID
+        good_id = None
 
         for order_time, order_number in possibilities:
             query = """
@@ -201,21 +213,16 @@ def process_variable_barcode():
             if order:
                 chosen_order_time = order_time
                 chosen_order_number = order_number
-                # استخراج GoodIDs از جدول Orders
                 if hasattr(order, "GoodIDs") and order.GoodIDs:
-                    good_id = order.GoodIDs.strip("{}").strip()  # حذف کروشه‌ها
+                    good_id = order.GoodIDs.strip("{}").strip()
                 break
 
+                
         if not order:
             return jsonify({"error": "No matching order found"}), 404
 
-        # مقدار Quantity را از جدول Good_Store بازیابی کن اگر GoodID وجود داشته باشد
-        quantity = None
-        if good_id:
-            cursor.execute("SELECT Quantity FROM Good_Store WHERE GoodID = ?", (good_id,))
-            good_row = cursor.fetchone()
-            if good_row:
-                quantity = good_row.Quantity
+        # 🎯 دریافت موجودی با تابع جدا
+        quantity = get_quantity_by_goodid(cursor, good_id)
 
         result = {
             "OrderID": str(order.OrderID),
@@ -223,12 +230,38 @@ def process_variable_barcode():
             "OrderDate": order_date,
             "OrderTime": chosen_order_time,
             "OrderNumber": chosen_order_number,
-            "Quantity": quantity  # مقدار Quantity اضافه شد
+            "GoodID": good_id,
+            "Quantity": quantity
         }
         return jsonify(result), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+    
+@routes.route("/get-quantity", methods=["GET"])
+def get_quantity():
+    """API برای دریافت موجودی کالا بر اساس GoodID"""
+    try:
+        good_id = request.args.get("GoodID")
+        if not good_id:
+            return jsonify({"error": "GoodID is required"}), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        quantity = get_quantity_by_goodid(cursor, good_id)
+        if quantity is None:
+            return jsonify({"GoodID": good_id, "Quantity": None, "message": "کالا یافت نشد"}), 404
+
+        return jsonify({"GoodID": good_id, "Quantity": str(quantity)}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
     finally:
         if 'conn' in locals():
             conn.close()
